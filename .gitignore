@@ -1,0 +1,4 @@
+proto/
+gen/
+bin/
+cmd/stream-client/stream-client

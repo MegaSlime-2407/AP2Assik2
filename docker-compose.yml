@@ -12,6 +12,7 @@ services:
     volumes:
       - order_data:/var/lib/postgresql/data
       - ./order-service/migrations/001_create_orders.sql:/docker-entrypoint-initdb.d/001_create_orders.sql
+      - ./order-service/migrations/002_notify_trigger.sql:/docker-entrypoint-initdb.d/002_notify_trigger.sql
 
   payment-db:
     image: postgres:16-alpine

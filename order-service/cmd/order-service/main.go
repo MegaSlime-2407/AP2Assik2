@@ -3,15 +3,14 @@ package main
 import (
 	"database/sql"
 	"log"
-	"net/http"
 	"os"
-	"time"
 
 	"github.com/google/uuid"
+	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 
 	"order-service/internal/app"
-	transporthttp "order-service/internal/transport/http"
+	transportgrpc "order-service/internal/transport/grpc"
 )
 
 type uuidGen struct{}
@@ -21,6 +20,8 @@ func (uuidGen) NewID() string {
 }
 
 func main() {
+	_ = godotenv.Load()
+
 	dsn := getEnv("ORDER_DB_DSN", "postgres://postgres:postgres@localhost:5434/order_db?sslmode=disable")
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
@@ -33,13 +34,17 @@ func main() {
 	}
 	log.Println("connected to order_db")
 
-	paymentURL := getEnv("PAYMENT_SERVICE_URL", "http://localhost:8082")
-	httpClient := &http.Client{Timeout: 2 * time.Second}
-	paymentClient := transporthttp.NewPaymentHTTPClient(paymentURL, httpClient)
+	paymentAddr := getEnv("PAYMENT_GRPC_ADDR", "localhost:50052")
+	paymentClient, err := transportgrpc.NewPaymentGRPCClient(paymentAddr)
+	if err != nil {
+		log.Fatal("cannot connect to payment gRPC:", err)
+	}
+	defer paymentClient.Close()
 
-	addr := getEnv("ORDER_ADDR", ":8081")
+	httpAddr := getEnv("ORDER_HTTP_ADDR", ":8081")
+	grpcAddr := getEnv("ORDER_GRPC_ADDR", ":50051")
 
-	application := app.New(db, paymentClient, uuidGen{}, addr)
+	application := app.New(db, paymentClient, uuidGen{}, httpAddr, grpcAddr, dsn)
 	log.Fatal(application.Run())
 }
 

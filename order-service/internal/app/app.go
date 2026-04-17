@@ -3,34 +3,63 @@ package app
 import (
 	"database/sql"
 	"log"
-	"net/http"
+	"net"
+
+	"github.com/gin-gonic/gin"
+	"google.golang.org/grpc"
+
+	pb "github.com/MegaSlime-2407/generated/order"
 
 	"order-service/internal/repository"
+	transportgrpc "order-service/internal/transport/grpc"
 	transporthttp "order-service/internal/transport/http"
 	"order-service/internal/usecase"
 )
 
 type App struct {
-	server *http.Server
+	router   *gin.Engine
+	httpAddr string
+	grpcSrv  *grpc.Server
+	grpcAddr string
 }
 
-func New(db *sql.DB, paymentClient usecase.PaymentClient, idGen usecase.IDGenerator, addr string) *App {
+func New(db *sql.DB, paymentClient usecase.PaymentClient, idGen usecase.IDGenerator, httpAddr, grpcAddr, dsn string) *App {
 	repo := repository.NewPostgresOrderRepo(db)
 	uc := usecase.NewOrderUseCase(repo, paymentClient, idGen)
-	handler := transporthttp.NewOrderHandler(uc)
 
-	mux := http.NewServeMux()
-	handler.RegisterRoutes(mux)
-
-	srv := &http.Server{
-		Addr:    addr,
-		Handler: mux,
+	if err := transportgrpc.SetupNotifyTrigger(db); err != nil {
+		log.Printf("warning: could not set up LISTEN/NOTIFY trigger: %v", err)
 	}
 
-	return &App{server: srv}
+	router := gin.Default()
+	httpHandler := transporthttp.NewOrderHandler(uc)
+	httpHandler.RegisterRoutes(router)
+
+	grpcSrv := grpc.NewServer()
+	orderTracking := transportgrpc.NewOrderTrackingServer(uc, dsn)
+	pb.RegisterOrderTrackingServiceServer(grpcSrv, orderTracking)
+
+	return &App{
+		router:   router,
+		httpAddr: httpAddr,
+		grpcSrv:  grpcSrv,
+		grpcAddr: grpcAddr,
+	}
 }
 
 func (a *App) Run() error {
-	log.Printf("Order Service started on %s\n", a.server.Addr)
-	return a.server.ListenAndServe()
+	lis, err := net.Listen("tcp", a.grpcAddr)
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		log.Printf("Order gRPC server started on %s\n", a.grpcAddr)
+		if err := a.grpcSrv.Serve(lis); err != nil {
+			log.Fatalf("gRPC server failed: %v", err)
+		}
+	}()
+
+	log.Printf("Order HTTP server (Gin) started on %s\n", a.httpAddr)
+	return a.router.Run(a.httpAddr)
 }
